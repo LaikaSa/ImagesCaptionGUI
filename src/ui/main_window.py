@@ -3,7 +3,7 @@ import json
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QFileDialog, QTextEdit, QMessageBox, QComboBox,
                               QDialog, QLineEdit, QFormLayout, QProgressBar, QMenuBar,
-                              QMenu, QDoubleSpinBox, QSpinBox)
+                              QMenu, QDoubleSpinBox, QSpinBox, QCheckBox)
 from PySide6.QtCore import Qt, QTimer, Signal, QThread
 from PySide6.QtGui import QPixmap
 import requests
@@ -17,18 +17,33 @@ class BatchProcessThread(QThread):
     finished = Signal(dict)  # results dictionary
     error = Signal(str)  # error message
 
-    def __init__(self, api_url, api_key, image_files, user_prompt, sampling_config):
+    def __init__(self, api_url, api_key, image_files, user_prompt, sampling_config, use_tags):
         super().__init__()
         self.api_url = api_url
         self.api_key = api_key
         self.image_files = image_files
         self.user_prompt = user_prompt
         self.sampling_config = sampling_config
+        self.use_tags = use_tags
         self.results = {}
 
     def run(self):
         try:
             for i, image_path in enumerate(self.image_files, 1):
+                # Try to load tags if enabled
+                prompt = self.user_prompt
+                if self.use_tags:
+                    try:
+                        tags_path = os.path.splitext(image_path)[0] + '.txt'
+                        if os.path.exists(tags_path):
+                            with open(tags_path, 'r', encoding='utf-8') as f:
+                                tags = f.read().strip()
+                                prompt += ' Also here are booru tags for better understanding of the picture, you can use them as reference.'
+                                prompt += f' <tags>\n{tags}\n</tags>'
+                    except Exception as e:
+                        print(f"Error loading tags for {image_path}: {str(e)}")
+
+                # Rest of your existing batch processing code...
                 headers = {
                     'Authorization': f'Bearer {self.api_key}',
                     'accept': 'application/json',
@@ -51,15 +66,14 @@ class BatchProcessThread(QThread):
                                 },
                                 {
                                     "type": "text",
-                                    "text": self.user_prompt
+                                    "text": prompt
                                 }
                             ]
                         }
                     ],
-                    **self.sampling_config  # Add sampling parameters to payload
+                    **self.sampling_config
                 }
 
-                # Send request
                 api_url = self.api_url
                 if not api_url.endswith('/v1/chat/completions'):
                     api_url = api_url.rstrip('/') + '/v1/chat/completions'
@@ -76,9 +90,9 @@ class BatchProcessThread(QThread):
                         caption = result['choices'][0]['message']['content']
                         self.results[image_path] = caption
 
-                        # Save caption to file
-                        txt_path = os.path.splitext(image_path)[0] + '.txt'
-                        with open(txt_path, 'w', encoding='utf-8') as f:
+                        # Save with .caption extension
+                        caption_path = os.path.splitext(image_path)[0] + '.caption'
+                        with open(caption_path, 'w', encoding='utf-8') as f:
                             f.write(caption)
 
                 self.progress.emit(i, len(self.image_files))
@@ -194,17 +208,21 @@ class SamplingConfigDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.setWindowTitle("Image Caption Generator")
+        self.setMinimumSize(800, 600)
+        
+        # Define caption styles
+        self.caption_styles = {
+            "JSON Format": "Describe the picture in structured json-like format.",
+            "Detailed": "Give a long and detailed description of the picture.",
+            "Brief": "Describe the picture briefly."
+        }
         
         # Initialize API configuration
         self.api_url = 'http://127.0.0.1:5000'
         self.api_key = ''
-        
-        # Load API configuration
         self.load_config()
-
-        self.setWindowTitle("Image Caption Generator")
-        self.setMinimumSize(800, 600)
-
+        
         # Initialize sampling config
         self.sampling_config = {
             'temperature': 1.0,
@@ -216,18 +234,6 @@ class MainWindow(QMainWindow):
         
         # Create menu bar
         self.create_menu_bar()
-        
-        # Create central widget and layout
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
-        
-        # Define caption styles
-        self.caption_styles = {
-            "JSON Format": "Describe the picture in structured json-like format.",
-            "Detailed": "Give a long and detailed description of the picture.",
-            "Brief": "Describe the picture briefly."
-        }
         
         # Create central widget and layout
         central_widget = QWidget()
@@ -254,10 +260,13 @@ class MainWindow(QMainWindow):
         style_layout.addWidget(self.style_combo)
         style_layout.addStretch()
         
+        # Create checkbox for tags
+        self.use_tags_checkbox = QCheckBox("Use Reference Tags")
+        self.use_tags_checkbox.setToolTip("If checked, will look for matching .txt files with reference tags")
+        
         self.upload_button = QPushButton("Upload Image")
         self.folder_button = QPushButton("Select Folder")
         self.generate_button = QPushButton("Generate Caption")
-        self.config_button = QPushButton("Configure API")
         self.generate_button.setEnabled(False)
         
         self.progress_bar = QProgressBar()
@@ -270,10 +279,10 @@ class MainWindow(QMainWindow):
         # Add widgets to layout
         layout.addWidget(self.image_label)
         layout.addLayout(style_layout)
+        layout.addWidget(self.use_tags_checkbox)
         layout.addWidget(self.upload_button)
         layout.addWidget(self.folder_button)
         layout.addWidget(self.generate_button)
-        layout.addWidget(self.config_button)
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.caption_text)
         
@@ -281,18 +290,18 @@ class MainWindow(QMainWindow):
         self.upload_button.clicked.connect(self.upload_image)
         self.folder_button.clicked.connect(self.select_folder)
         self.generate_button.clicked.connect(self.generate_caption)
-        self.config_button.clicked.connect(self.show_config_dialog)
+        self.use_tags_checkbox.stateChanged.connect(self.update_generate_button_state)
+        self.style_combo.currentIndexChanged.connect(self.update_generate_button_state)
         
         self.current_image_path = None
-        self.selected_files = []  # Store selected image files
-        self.is_batch_mode = False  # Flag for batch processing
+        self.selected_files = []
+        self.is_batch_mode = False
         
         # Start backend status check timer
         self.check_timer = QTimer()
         self.check_timer.timeout.connect(self.check_backend_status)
         self.check_timer.start(5000)
         self.check_backend_status()
-
 
     def process_folder(self):
         folder_path = QFileDialog.getExistingDirectory(
@@ -338,12 +347,12 @@ class MainWindow(QMainWindow):
     def batch_processing_finished(self, results):
         # Re-enable buttons and hide progress bar
         self.upload_button.setEnabled(True)
-        self.batch_button.setEnabled(True)
-        self.generate_button.setEnabled(self.current_image_path is not None)
+        self.folder_button.setEnabled(True)
         self.progress_bar.hide()
+        self.update_generate_button_state()
 
         # Show summary
-        summary = f"Processed {len(results)} images.\n\nResults have been saved as .txt files next to the images."
+        summary = f"Processed {len(results)} images.\n\nResults have been saved as .caption files next to the images."
         self.caption_text.setText(summary)
 
     def batch_processing_error(self, error_message):
@@ -371,26 +380,22 @@ class MainWindow(QMainWindow):
 
     def check_backend_status(self):
         try:
-            api_url = self.api_url
-            if not api_url.endswith('/v1/chat/completions'):
-                api_url = api_url.rstrip('/') + '/v1/chat/completions'
-                
+            base_url = self.api_url.split('/v1')[0]
             headers = {
                 'Authorization': f'Bearer {self.api_key}',
                 'accept': 'application/json'
             }
             
-            # Simple test request
-            response = requests.get(api_url, headers=headers)
+            response = requests.get(base_url, headers=headers)
             
-            if response.status_code in [200, 404, 405]:  # 404/405 means endpoint exists but wrong method
+            if response.status_code != 500:
                 self.status_label.setText("Backend Status: Connected")
                 self.status_label.setStyleSheet("color: green")
-                self.generate_button.setEnabled(True if self.current_image_path else False)
+                self.update_generate_button_state()
             else:
                 raise Exception("Backend not responding properly")
         except Exception as e:
-            print(f"Backend connection error: {str(e)}")  # Debug print
+            print(f"Backend connection error: {str(e)}")
             self.status_label.setText("Backend Status: Not Connected")
             self.status_label.setStyleSheet("color: red")
             self.generate_button.setEnabled(False)
@@ -417,12 +422,13 @@ class MainWindow(QMainWindow):
             return
 
         self.is_batch_mode = True
-        self.generate_button.setEnabled(True)
         self.caption_text.setText(f"Found {len(self.selected_files)} images. Click 'Generate Caption' to process them.")
 
         # Show first image as preview
         if self.selected_files:
             self.show_preview(self.selected_files[0])
+        
+        self.update_generate_button_state()
 
     def show_preview(self, image_path):
         pixmap = QPixmap(image_path)
@@ -446,8 +452,8 @@ class MainWindow(QMainWindow):
             self.is_batch_mode = False
             self.selected_files = []
             self.show_preview(file_name)
-            self.generate_button.setEnabled(True)
             self.caption_text.clear()
+            self.update_generate_button_state()
 
     def create_menu_bar(self):
         menubar = self.menuBar()
@@ -459,6 +465,10 @@ class MainWindow(QMainWindow):
         sampling_action = settings_menu.addAction("Sampling")
         sampling_action.triggered.connect(self.show_sampling_dialog)
 
+        # Add Configure API action
+        api_config_action = settings_menu.addAction("Configure API")
+        api_config_action.triggered.connect(self.show_config_dialog)
+
     def show_sampling_dialog(self):
         dialog = SamplingConfigDialog(self)
         if dialog.exec_():
@@ -469,7 +479,20 @@ class MainWindow(QMainWindow):
         if os.path.exists('sampling_config.json'):
             with open('sampling_config.json', 'r') as f:
                 self.sampling_config = json.load(f)
-                
+
+    def update_generate_button_state(self):
+        """Update generate button state based on current conditions"""
+        should_enable = False
+        
+        if self.is_batch_mode:
+            # Enable if we have files selected for batch mode
+            should_enable = len(self.selected_files) > 0
+        else:
+            # Enable if we have a single image selected
+            should_enable = self.current_image_path is not None
+
+        self.generate_button.setEnabled(should_enable)
+
     def generate_caption(self):
         if not self.api_url or not self.api_key:
             QMessageBox.warning(self, "Configuration Missing", 
@@ -488,7 +511,8 @@ class MainWindow(QMainWindow):
                 self.api_key, 
                 self.selected_files, 
                 user_prompt,
-                self.sampling_config  # Pass sampling config to thread
+                self.sampling_config,
+                self.use_tags_checkbox.isChecked()  # Pass checkbox state
             )
             self.batch_thread.progress.connect(self.update_progress)
             self.batch_thread.finished.connect(self.batch_processing_finished)
@@ -511,6 +535,18 @@ class MainWindow(QMainWindow):
                     'accept': 'application/json',
                     'Content-Type': 'application/json'
                 }
+
+                # Try to load tags if enabled
+                if self.use_tags_checkbox.isChecked():
+                    try:
+                        tags_path = os.path.splitext(self.current_image_path)[0] + '.txt'
+                        if os.path.exists(tags_path):
+                            with open(tags_path, 'r', encoding='utf-8') as f:
+                                tags = f.read().strip()
+                                user_prompt += ' Also here are booru tags for better understanding of the picture, you can use them as reference.'
+                                user_prompt += f' <tags>\n{tags}\n</tags>'
+                    except Exception as e:
+                        print(f"Error loading tags: {str(e)}")
 
                 # Read and encode image
                 with open(self.current_image_path, 'rb') as img_file:
@@ -564,9 +600,9 @@ class MainWindow(QMainWindow):
                             caption = result['choices'][0]['message']['content']
                             self.caption_text.setText(caption)
 
-                            # Optionally save single image caption too
-                            txt_path = os.path.splitext(self.current_image_path)[0] + '.txt'
-                            with open(txt_path, 'w', encoding='utf-8') as f:
+                            # Save caption with .caption extension
+                            caption_path = os.path.splitext(self.current_image_path)[0] + '.caption'
+                            with open(caption_path, 'w', encoding='utf-8') as f:
                                 f.write(caption)
                         else:
                             self.caption_text.setText("No caption generated")
