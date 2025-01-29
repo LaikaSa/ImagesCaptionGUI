@@ -3,7 +3,7 @@ import json
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QLabel, QFileDialog, QTextEdit, QMessageBox, QComboBox,
                               QDialog, QLineEdit, QFormLayout, QProgressBar, QMenuBar,
-                              QMenu, QDoubleSpinBox, QSpinBox, QCheckBox)
+                              QMenu, QDoubleSpinBox, QSpinBox, QCheckBox, QRadioButton)
 from PySide6.QtCore import Qt, QTimer, Signal, QThread
 from PySide6.QtGui import QPixmap
 import requests
@@ -11,11 +11,12 @@ import base64
 import asyncio
 from PIL import Image
 import io
+from tqdm import tqdm
 
 class BatchProcessThread(QThread):
-    progress = Signal(int, int)  # current, total
-    finished = Signal(dict)  # results dictionary
-    error = Signal(str)  # error message
+    progress = Signal(int, int)
+    finished = Signal(dict)
+    error = Signal(str)
 
     def __init__(self, api_url, api_key, image_files, user_prompt, sampling_config, use_tags):
         super().__init__()
@@ -29,7 +30,8 @@ class BatchProcessThread(QThread):
 
     def run(self):
         try:
-            for i, image_path in enumerate(self.image_files, 1):
+            # Create progress bar in terminal
+            for i, image_path in enumerate(tqdm(self.image_files, desc="Processing", ncols=70), 1):
                 # Try to load tags if enabled
                 prompt = self.user_prompt
                 if self.use_tags:
@@ -43,7 +45,6 @@ class BatchProcessThread(QThread):
                     except Exception as e:
                         print(f"Error loading tags for {image_path}: {str(e)}")
 
-                # Rest of your existing batch processing code...
                 headers = {
                     'Authorization': f'Bearer {self.api_key}',
                     'accept': 'application/json',
@@ -211,6 +212,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Image Caption Generator")
         self.setMinimumSize(800, 600)
         
+        # Initialize class variables
+        self.current_image_path = None
+        self.selected_files = []
+        self.is_batch_mode = False  # Initialize here
+        
         # Define caption styles
         self.caption_styles = {
             "JSON Format": "Describe the picture in structured json-like format.",
@@ -260,17 +266,29 @@ class MainWindow(QMainWindow):
         style_layout.addWidget(self.style_combo)
         style_layout.addStretch()
         
+        # Create radio buttons and select button layout
+        mode_layout = QHBoxLayout()
+        
+        # Create radio buttons
+        self.single_radio = QRadioButton("Single Image")
+        self.folder_radio = QRadioButton("Folder")
+        self.single_radio.setChecked(True)  # Default to single image mode
+        
+        # Create select button
+        self.select_button = QPushButton("Select Image")
+        
+        # Add to horizontal layout
+        mode_layout.addWidget(self.single_radio)
+        mode_layout.addWidget(self.folder_radio)
+        mode_layout.addWidget(self.select_button)
+        mode_layout.addStretch()
+        
         # Create checkbox for tags
         self.use_tags_checkbox = QCheckBox("Use Reference Tags")
         self.use_tags_checkbox.setToolTip("If checked, will look for matching .txt files with reference tags")
         
-        self.upload_button = QPushButton("Upload Image")
-        self.folder_button = QPushButton("Select Folder")
         self.generate_button = QPushButton("Generate Caption")
         self.generate_button.setEnabled(False)
-        
-        self.progress_bar = QProgressBar()
-        self.progress_bar.hide()
         
         self.caption_text = QTextEdit()
         self.caption_text.setReadOnly(True)
@@ -279,23 +297,18 @@ class MainWindow(QMainWindow):
         # Add widgets to layout
         layout.addWidget(self.image_label)
         layout.addLayout(style_layout)
+        layout.addLayout(mode_layout)
         layout.addWidget(self.use_tags_checkbox)
-        layout.addWidget(self.upload_button)
-        layout.addWidget(self.folder_button)
         layout.addWidget(self.generate_button)
-        layout.addWidget(self.progress_bar)
         layout.addWidget(self.caption_text)
         
         # Connect signals
-        self.upload_button.clicked.connect(self.upload_image)
-        self.folder_button.clicked.connect(self.select_folder)
+        self.select_button.clicked.connect(self.handle_select)
+        self.single_radio.toggled.connect(self.update_select_button)
+        self.folder_radio.toggled.connect(self.update_select_button)
         self.generate_button.clicked.connect(self.generate_caption)
         self.use_tags_checkbox.stateChanged.connect(self.update_generate_button_state)
         self.style_combo.currentIndexChanged.connect(self.update_generate_button_state)
-        
-        self.current_image_path = None
-        self.selected_files = []
-        self.is_batch_mode = False
         
         # Start backend status check timer
         self.check_timer = QTimer()
@@ -341,26 +354,25 @@ class MainWindow(QMainWindow):
         self.batch_thread.start()
 
     def update_progress(self, current, total):
-        self.progress_bar.setValue(current)
         self.caption_text.setText(f"Processing image {current} of {total}...")
 
     def batch_processing_finished(self, results):
-        # Re-enable buttons and hide progress bar
-        self.upload_button.setEnabled(True)
-        self.folder_button.setEnabled(True)
-        self.progress_bar.hide()
-        self.update_generate_button_state()
+        # Re-enable buttons
+        self.select_button.setEnabled(True)
+        self.generate_button.setEnabled(True)
+        self.single_radio.setEnabled(True)
+        self.folder_radio.setEnabled(True)
 
         # Show summary
         summary = f"Processed {len(results)} images.\n\nResults have been saved as .caption files next to the images."
         self.caption_text.setText(summary)
 
     def batch_processing_error(self, error_message):
-        # Re-enable buttons and hide progress bar
-        self.upload_button.setEnabled(True)
-        self.batch_button.setEnabled(True)
-        self.generate_button.setEnabled(self.current_image_path is not None)
-        self.progress_bar.hide()
+        # Re-enable buttons
+        self.select_button.setEnabled(True)
+        self.generate_button.setEnabled(True)
+        self.single_radio.setEnabled(True)
+        self.folder_radio.setEnabled(True)
 
         QMessageBox.critical(self, "Error", f"An error occurred during batch processing:\n{error_message}")
 
@@ -401,6 +413,7 @@ class MainWindow(QMainWindow):
             self.generate_button.setEnabled(False)
 
     def select_folder(self):
+        """Handle folder selection"""
         folder_path = QFileDialog.getExistingDirectory(
             self,
             "Select Folder with Images",
@@ -421,7 +434,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Images", "No supported image files found in the selected folder.")
             return
 
-        self.is_batch_mode = True
+        self.current_image_path = None
         self.caption_text.setText(f"Found {len(self.selected_files)} images. Click 'Generate Caption' to process them.")
 
         # Show first image as preview
@@ -439,7 +452,24 @@ class MainWindow(QMainWindow):
         )
         self.image_label.setPixmap(scaled_pixmap)
 
+    def update_select_button(self):
+        """Update select button text based on selected mode"""
+        if self.single_radio.isChecked():
+            self.select_button.setText("Select Image")
+            self.is_batch_mode = False
+        else:
+            self.select_button.setText("Select Folder")
+            self.is_batch_mode = True
+
+    def handle_select(self):
+        """Handle selection based on current mode"""
+        if self.single_radio.isChecked():
+            self.upload_image()
+        else:
+            self.select_folder()
+
     def upload_image(self):
+        """Handle single image selection"""
         file_name, _ = QFileDialog.getOpenFileName(
             self,
             "Select Image",
@@ -449,7 +479,6 @@ class MainWindow(QMainWindow):
         
         if file_name:
             self.current_image_path = file_name
-            self.is_batch_mode = False
             self.selected_files = []
             self.show_preview(file_name)
             self.caption_text.clear()
@@ -512,19 +541,17 @@ class MainWindow(QMainWindow):
                 self.selected_files, 
                 user_prompt,
                 self.sampling_config,
-                self.use_tags_checkbox.isChecked()  # Pass checkbox state
+                self.use_tags_checkbox.isChecked()
             )
             self.batch_thread.progress.connect(self.update_progress)
             self.batch_thread.finished.connect(self.batch_processing_finished)
             self.batch_thread.error.connect(self.batch_processing_error)
 
             # Update UI
-            self.upload_button.setEnabled(False)
-            self.folder_button.setEnabled(False)
+            self.select_button.setEnabled(False)
             self.generate_button.setEnabled(False)
-            self.progress_bar.setMaximum(len(self.selected_files))
-            self.progress_bar.setValue(0)
-            self.progress_bar.show()
+            self.single_radio.setEnabled(False)
+            self.folder_radio.setEnabled(False)
 
             self.batch_thread.start()
         else:
@@ -535,18 +562,6 @@ class MainWindow(QMainWindow):
                     'accept': 'application/json',
                     'Content-Type': 'application/json'
                 }
-
-                # Try to load tags if enabled
-                if self.use_tags_checkbox.isChecked():
-                    try:
-                        tags_path = os.path.splitext(self.current_image_path)[0] + '.txt'
-                        if os.path.exists(tags_path):
-                            with open(tags_path, 'r', encoding='utf-8') as f:
-                                tags = f.read().strip()
-                                user_prompt += ' Also here are booru tags for better understanding of the picture, you can use them as reference.'
-                                user_prompt += f' <tags>\n{tags}\n</tags>'
-                    except Exception as e:
-                        print(f"Error loading tags: {str(e)}")
 
                 # Read and encode image
                 with open(self.current_image_path, 'rb') as img_file:
@@ -600,7 +615,7 @@ class MainWindow(QMainWindow):
                             caption = result['choices'][0]['message']['content']
                             self.caption_text.setText(caption)
 
-                            # Save caption with .caption extension
+                            # Save with .caption extension
                             caption_path = os.path.splitext(self.current_image_path)[0] + '.caption'
                             with open(caption_path, 'w', encoding='utf-8') as f:
                                 f.write(caption)
