@@ -18,7 +18,7 @@ class BatchProcessThread(QThread):
     finished = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, api_url, api_key, image_files, user_prompt, sampling_config, use_tags):
+    def __init__(self, api_url, api_key, image_files, user_prompt, sampling_config, use_tags, prefix=""):
         super().__init__()
         self.api_url = api_url
         self.api_key = api_key
@@ -26,11 +26,11 @@ class BatchProcessThread(QThread):
         self.user_prompt = user_prompt
         self.sampling_config = sampling_config
         self.use_tags = use_tags
+        self.prefix = prefix.strip()
         self.results = {}
 
     def run(self):
         try:
-            # Create progress bar in terminal
             for i, image_path in enumerate(tqdm(self.image_files, desc="Processing", ncols=70), 1):
                 # Try to load tags if enabled
                 prompt = self.user_prompt
@@ -89,12 +89,17 @@ class BatchProcessThread(QThread):
                     result = response.json()
                     if 'choices' in result and len(result['choices']) > 0:
                         caption = result['choices'][0]['message']['content']
+                        
+                        # Add prefix to caption content if provided
+                        if self.prefix:
+                            caption = f"{self.prefix}\n{caption}"
+                            
                         self.results[image_path] = caption
 
-                        # Save with .caption extension
+                        # Save caption file with same name as image but .caption extension
                         caption_path = os.path.splitext(image_path)[0] + '.caption'
                         with open(caption_path, 'w', encoding='utf-8') as f:
-                            f.write(caption)
+                            f.write(caption)  # Save with prefix included
 
                 self.progress.emit(i, len(self.image_files))
 
@@ -266,7 +271,7 @@ class MainWindow(QMainWindow):
         style_layout.addWidget(self.style_combo)
         style_layout.addStretch()
         
-        # Create radio buttons and select button layout
+        # Create radio buttons and select button layout with prefix
         mode_layout = QHBoxLayout()
         
         # Create radio buttons
@@ -277,10 +282,18 @@ class MainWindow(QMainWindow):
         # Create select button
         self.select_button = QPushButton("Select Image")
         
+        # Create prefix input
+        prefix_label = QLabel("Prefix:")
+        self.prefix_input = QLineEdit()
+        self.prefix_input.setPlaceholderText("Optional prefix for saved files")
+        self.prefix_input.setMaximumWidth(150)  # Limit width
+        
         # Add to horizontal layout
         mode_layout.addWidget(self.single_radio)
         mode_layout.addWidget(self.folder_radio)
         mode_layout.addWidget(self.select_button)
+        mode_layout.addWidget(prefix_label)
+        mode_layout.addWidget(self.prefix_input)
         mode_layout.addStretch()
         
         # Create checkbox for tags
@@ -541,7 +554,8 @@ class MainWindow(QMainWindow):
                 self.selected_files, 
                 user_prompt,
                 self.sampling_config,
-                self.use_tags_checkbox.isChecked()
+                self.use_tags_checkbox.isChecked(),
+                self.prefix_input.text()  # Pass the prefix
             )
             self.batch_thread.progress.connect(self.update_progress)
             self.batch_thread.finished.connect(self.batch_processing_finished)
@@ -562,6 +576,18 @@ class MainWindow(QMainWindow):
                     'accept': 'application/json',
                     'Content-Type': 'application/json'
                 }
+
+                # Try to load tags if enabled
+                if self.use_tags_checkbox.isChecked():
+                    try:
+                        tags_path = os.path.splitext(self.current_image_path)[0] + '.txt'
+                        if os.path.exists(tags_path):
+                            with open(tags_path, 'r', encoding='utf-8') as f:
+                                tags = f.read().strip()
+                                user_prompt += ' Also here are booru tags for better understanding of the picture, you can use them as reference.'
+                                user_prompt += f' <tags>\n{tags}\n</tags>'
+                    except Exception as e:
+                        print(f"Error loading tags: {str(e)}")
 
                 # Read and encode image
                 with open(self.current_image_path, 'rb') as img_file:
@@ -613,12 +639,18 @@ class MainWindow(QMainWindow):
                         result = response.json()
                         if 'choices' in result and len(result['choices']) > 0:
                             caption = result['choices'][0]['message']['content']
+                            
+                            # Add prefix to caption content if provided
+                            prefix = self.prefix_input.text().strip()
+                            if prefix:
+                                caption = f"{prefix}\n{caption}"
+                                
                             self.caption_text.setText(caption)
 
-                            # Save with .caption extension
+                            # Save caption file with same name as image but .caption extension
                             caption_path = os.path.splitext(self.current_image_path)[0] + '.caption'
                             with open(caption_path, 'w', encoding='utf-8') as f:
-                                f.write(caption)
+                                f.write(caption)  # Save with prefix included
                         else:
                             self.caption_text.setText("No caption generated")
                     except ValueError:
