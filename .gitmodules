@@ -1,0 +1,3 @@
+[submodule "backend/tabbyAI"]
+	path = backend/tabbyAI
+	url = https://github.com/theroyallab/tabbyAPI.git
