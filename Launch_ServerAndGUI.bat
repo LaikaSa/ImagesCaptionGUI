@@ -1,15 +1,23 @@
 @echo off
-set CUDA_VISIBLE_DEVICES=1
 setlocal
 
 :: Start TabbyAPI backend in a new window
-start "TabbyAPI Backend" cmd /k "cd backend\tabbyAPI && start.bat"
+start "TabbyAPI Backend" cmd /k "cd backend && start.bat"
 
-:: Wait for backend to initialize (adjust time if needed)
-timeout /t 10 /nobreak
+echo Waiting for TabbyAPI to initialize...
 
-:: Start GUI
+:check_loop
+:: Check if the server is responding
+curl -s http://127.0.0.1:5000/health | findstr /C:"healthy" >nul
+if %ERRORLEVEL%==0 (
+    echo TabbyAPI is ready! Starting GUI...
+    goto start_gui
+)
+timeout /t 2 /nobreak >nul
+goto check_loop
+
+:start_gui
 call venv\Scripts\activate
-python src/main.py
+python main.py
 
 endlocal

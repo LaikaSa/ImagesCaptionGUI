@@ -10,30 +10,12 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-:: Create backend directory if not exists
-if not exist "backend" (
-    mkdir backend
-)
-
-:: Clone TabbyAPI if not exists
-if not exist "backend\tabbyAPI" (
-    echo Cloning TabbyAPI...
-    cd backend
-    git clone https://github.com/theroyallab/tabbyAPI.git
-    cd ..
-    if %ERRORLEVEL% NEQ 0 (
-        echo Error: Failed to clone TabbyAPI repository.
-        pause
-        exit /b 1
-    )
-)
-
 :: Create a temporary batch file for TabbyAPI installation
 echo @echo off > install_tabby.bat
-echo cd backend\tabbyAPI >> install_tabby.bat
+echo cd backend >> install_tabby.bat
 echo python -m venv venv >> install_tabby.bat
 echo call venv\Scripts\activate >> install_tabby.bat
-echo start "TabbyAPI Server" /wait cmd /c "python start.py ^& timeout /t 20 ^& taskkill /F /PID %%PID%%" >> install_tabby.bat
+echo start "TabbyAPI Server" /wait cmd /c "python start.py ^& timeout /t 30 ^& taskkill /F /PID %%PID%%" >> install_tabby.bat
 echo exit >> install_tabby.bat
 
 :: Run TabbyAPI installation first
@@ -57,7 +39,7 @@ start /wait cmd /c install_gui.bat
 echo.
 echo Installation completed!
 echo To start the application:
-echo 1. First run the backend using 'backend\tabbyAPI\start.bat'
+echo 1. First run the backend using 'backend\start.bat'
 echo 2. Then run the GUI using 'run.bat'
 echo.
 pause
