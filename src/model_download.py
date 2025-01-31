@@ -35,37 +35,49 @@ class ModelDownloadDialog(QDialog):
         if not repo_id:
             QMessageBox.warning(self, "Error", "Please enter a repository ID")
             return
-            
-        try:
-            self.download_button.setEnabled(False)
-            self.status_label.setText("Starting download...")
-            
-            # Get API configuration from parent window
-            api_url = self.parent().api_url.rstrip('/') + '/v1/download'
+
+        def download_task(repo_id, api_url, api_key):
+            api_url = api_url.rstrip('/') + '/v1/download'
             headers = {
-                'Authorization': f'Bearer {self.parent().api_key}',
+                'Authorization': f'Bearer {api_key}',
                 'Content-Type': 'application/json'
             }
             
             payload = {
                 "repo_id": repo_id,
-                "folder_name": None,  # Use default folder name
-                "revision": None,     # Use default revision
-                "token": None,        # No HF token
-                "chunk_limit": None,  # Use default chunk size
+                "folder_name": None,
+                "revision": None,
+                "token": None,
+                "chunk_limit": None,
                 "repo_type": "model"
             }
             
             response = requests.post(api_url, headers=headers, json=payload)
-            
-            if response.status_code == 200:
-                QMessageBox.information(self, "Success", "Model downloaded successfully!")
-                self.parent().refresh_models()  # Refresh model list
-                self.accept()
-            else:
-                QMessageBox.critical(self, "Error", f"Download failed: {response.text}")
-                self.download_button.setEnabled(True)
-                
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Download failed: {str(e)}")
-            self.download_button.setEnabled(True)
+            if response.status_code != 200:
+                raise Exception(f"Download failed: {response.text}")
+            return response.json()
+
+        self.download_button.setEnabled(False)
+        self.status_label.setText("Downloading model...")
+
+        # Create and start worker thread
+        self.worker = WorkerThread(
+            download_task, 
+            repo_id, 
+            self.parent().api_url, 
+            self.parent().api_key
+        )
+        self.worker.finished.connect(self.on_download_complete)
+        self.worker.error.connect(self.on_download_error)
+        self.worker.start()
+
+    def on_download_complete(self, result):
+        self.download_button.setEnabled(True)
+        QMessageBox.information(self, "Success", "Model downloaded successfully!")
+        self.parent().refresh_models()
+        self.accept()
+
+    def on_download_error(self, error_msg):
+        self.download_button.setEnabled(True)
+        self.status_label.setText("")
+        QMessageBox.critical(self, "Error", str(error_msg))

@@ -10,6 +10,10 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
+:: Initialize and update submodules
+echo Initializing TabbyAPI submodule...
+git submodule update --init --recursive
+
 :: Create a temporary batch file for TabbyAPI installation
 echo @echo off > install_tabby.bat
 echo cd backend >> install_tabby.bat
