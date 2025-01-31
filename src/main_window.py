@@ -11,8 +11,25 @@ import requests
 import base64
 from tqdm import tqdm
 import time
-from src.model_download import ModelDownloadDialog
+from src.model_download import ModelDownloadDialog  # At the top of your file
 from src.worker_thread import WorkerThread
+
+class ModelComboBox(QComboBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent = parent
+
+    def mousePressEvent(self, event):
+        if self.count() == 1 and self.currentText() == "Add new model...":
+            print("Empty state click detected, showing download dialog...")
+            dialog = ModelDownloadDialog(self.parent)
+            dialog.setWindowTitle("Download New Model")
+            dialog.setModal(True)
+            if dialog.exec():
+                print("Model download dialog accepted")
+                self.parent.refresh_models()
+        else:
+            super().mousePressEvent(event)
 
 class BatchProcessThread(QThread):
     progress = Signal(int, int)
@@ -240,7 +257,7 @@ class MainWindow(QMainWindow):
         # Initialize class variables
         self.current_image_path = None
         self.selected_files = []
-        self.is_batch_mode = False
+        self.is_batch_mode = False  # Initialize here
         
         # Define caption styles
         self.caption_styles = {
@@ -254,7 +271,7 @@ class MainWindow(QMainWindow):
         self.api_key = ''
         self.load_config()
         
-        # Initialize sampling config
+        # Initialize sampling config from model's config or defaults
         self.sampling_config = self.get_default_sampling_config()
         self.load_sampling_config()
         
@@ -266,53 +283,37 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
         
-        # Create all UI elements first
-        self.setup_ui(layout)  # Move UI creation to separate method
-        
-        # Now initialize model-related features
-        self.model_combo.blockSignals(True)  # Block signals during initial setup
-        self.refresh_models()
-        self.model_combo.blockSignals(False)
-        
-        # Start timers
-        self.check_timer = QTimer()
-        self.check_timer.timeout.connect(self.check_backend_status)
-        self.check_timer.start(5000)
-        
-        self.model_refresh_timer = QTimer()
-        self.model_refresh_timer.timeout.connect(self.refresh_model_status)
-        self.model_refresh_timer.start(10000)
-        
-        # Initial status check
-        self.check_backend_status()
-
-    def setup_ui(self, layout):
-        """Create and setup all UI elements"""
         # Create model selection layout
         model_layout = QHBoxLayout()
         model_layout.addStretch()
         
         model_label = QLabel("Model:")
-        self.model_combo = QComboBox()
+        # Use the custom combo box instead of the standard one
+        self.model_combo = ModelComboBox(self)  # Changed this line
         self.model_combo.setMinimumWidth(200)
         
         model_layout.addWidget(model_label)
         model_layout.addWidget(self.model_combo)
+        
+        # Add model selection to layout
         layout.addLayout(model_layout)
+        
+        # Initialize models
+        print("Initializing models...")
+        self.refresh_models()
         
         # Add status indicator
         self.status_label = QLabel("Checking backend status...")
         self.status_label.setStyleSheet("color: orange")
         layout.addWidget(self.status_label)
         
-        # Create image label
+        # Create UI elements
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setMinimumHeight(300)
         self.image_label.setStyleSheet("border: 2px dashed gray;")
-        layout.addWidget(self.image_label)
         
-        # Create style selection
+        # Create style selection combo box
         style_layout = QHBoxLayout()
         style_label = QLabel("Caption Style:")
         self.style_combo = QComboBox()
@@ -320,55 +321,78 @@ class MainWindow(QMainWindow):
         style_layout.addWidget(style_label)
         style_layout.addWidget(self.style_combo)
         style_layout.addStretch()
-        layout.addLayout(style_layout)
         
-        # Create mode selection and prefix input
+        # Create radio buttons and select button layout with prefix
         mode_layout = QHBoxLayout()
+        
+        # Create radio buttons
         self.single_radio = QRadioButton("Single Image")
         self.folder_radio = QRadioButton("Folder")
-        self.single_radio.setChecked(True)
+        self.single_radio.setChecked(True)  # Default to single image mode
+        
+        # Create select button
         self.select_button = QPushButton("Select Image")
         
+        # Create prefix input
         prefix_label = QLabel("Prefix:")
         self.prefix_input = QLineEdit()
         self.prefix_input.setPlaceholderText("Optional prefix for saved files")
-        self.prefix_input.setMaximumWidth(150)
+        self.prefix_input.setMaximumWidth(150)  # Limit width
         
+        # Add to horizontal layout
         mode_layout.addWidget(self.single_radio)
         mode_layout.addWidget(self.folder_radio)
         mode_layout.addWidget(self.select_button)
         mode_layout.addWidget(prefix_label)
         mode_layout.addWidget(self.prefix_input)
         mode_layout.addStretch()
-        layout.addLayout(mode_layout)
         
-        # Create tags checkbox
+        # Create checkbox for tags
         self.use_tags_checkbox = QCheckBox("Use Reference Tags")
         self.use_tags_checkbox.setToolTip("If checked, will look for matching .txt files with reference tags")
-        layout.addWidget(self.use_tags_checkbox)
         
-        # Create generate button
         self.generate_button = QPushButton("Generate Caption")
         self.generate_button.setEnabled(False)
-        layout.addWidget(self.generate_button)
         
-        # Create caption text area
         self.caption_text = QTextEdit()
         self.caption_text.setReadOnly(True)
         self.caption_text.setPlaceholderText("Generated caption will appear here...")
+        
+        # Add widgets to layout
+        layout.addWidget(self.image_label)
+        layout.addLayout(style_layout)
+        layout.addLayout(mode_layout)
+        layout.addWidget(self.use_tags_checkbox)
+        layout.addWidget(self.generate_button)
         layout.addWidget(self.caption_text)
         
         # Connect signals
-        self.connect_signals()
-
-    def connect_signals(self):
-        """Connect all signal handlers"""
         self.select_button.clicked.connect(self.handle_select)
         self.single_radio.toggled.connect(self.update_select_button)
         self.folder_radio.toggled.connect(self.update_select_button)
         self.generate_button.clicked.connect(self.generate_caption)
         self.use_tags_checkbox.stateChanged.connect(self.update_generate_button_state)
         self.style_combo.currentIndexChanged.connect(self.update_generate_button_state)
+        
+        # Initialize model combo signal
+        print("Setting up model combo signal...")  # Debug print
+
+        # Load available models
+        print("Refreshing models...")  # Debug print
+        self.refresh_models()
+        
+        # Start backend status check timer
+        self.check_timer = QTimer()
+        self.check_timer.timeout.connect(self.check_backend_status)
+        self.check_timer.start(5000)
+        
+        # Start model refresh timer
+        self.model_refresh_timer = QTimer()
+        self.model_refresh_timer.timeout.connect(self.refresh_model_status)
+        self.model_refresh_timer.start(10000)
+        
+        # Initial status check
+        self.check_backend_status()
 
     def refresh_models(self):
         """Get list of available models and sync with currently loaded model"""
@@ -377,91 +401,97 @@ class MainWindow(QMainWindow):
         backend_path = Path("backend")
         models_path = backend_path / "models"
         
+        # Create models directory if it doesn't exist
+        models_path.mkdir(parents=True, exist_ok=True)
+        
+        # Block signals temporarily
+        self.model_combo.blockSignals(True)
+        
+        # Get list of installed models
+        models = []
         if models_path.exists():
             models = [d.name for d in models_path.iterdir() if d.is_dir()]
-            if models:
-                # Block signals temporarily
-                self.model_combo.blockSignals(True)
+        
+        # Add installed models if any
+        if models:
+            self.model_combo.addItems(models)
+            self.model_combo.addItem("-" * 30)  # Separator
+        
+        # Always add "Add new model..." option
+        self.model_combo.addItem("Add new model...")
+        
+        # Get currently loaded model from server
+        try:
+            # First try health endpoint
+            health_url = self.api_url.rstrip('/') + '/health'
+            headers = {
+                'Authorization': f'Bearer {self.api_key}',
+                'accept': 'application/json'
+            }
+            
+            health_response = requests.get(health_url, headers=headers, timeout=5)
+            current_model = None
+            
+            if health_response.status_code == 200:
+                health_data = health_response.json()
+                current_model = health_data.get('model_name')
                 
-                # Add models to dropdown
-                self.model_combo.addItems(models)
-                
-                # Add separator and "Add new model" option
-                self.model_combo.addItem("-" * 30)  # Separator
-                self.model_combo.addItem("Add new model...")
-                
-                # Get currently loaded model from server
-                try:
-                    # First try health endpoint which might have model info
-                    health_url = self.api_url.rstrip('/') + '/health'
-                    headers = {
-                        'Authorization': f'Bearer {self.api_key}',
-                        'accept': 'application/json'
+                # If health endpoint doesn't provide model info, try completion endpoint
+                if not current_model:
+                    api_url = self.api_url.rstrip('/') + '/v1/chat/completions'
+                    headers['Content-Type'] = 'application/json'
+                    
+                    payload = {
+                        "messages": [{"role": "user", "content": "test"}],
+                        "max_tokens": 1
                     }
                     
-                    health_response = requests.get(health_url, headers=headers, timeout=5)
+                    response = requests.post(api_url, headers=headers, json=payload, timeout=5)
                     
-                    if health_response.status_code == 200:
-                        health_data = health_response.json()
-                        current_model = health_data.get('model_name')
-                        
-                        if not current_model:  # If health endpoint doesn't have model info, try completion endpoint
-                            api_url = self.api_url.rstrip('/') + '/v1/chat/completions'
-                            headers['Content-Type'] = 'application/json'
-                            
-                            payload = {
-                                "messages": [{"role": "user", "content": "test"}],
-                                "max_tokens": 1
-                            }
-                            
-                            response = requests.post(api_url, headers=headers, json=payload, timeout=5)
-                            
-                            if response.status_code == 200:
-                                current_model = response.json().get('model')
-                        
-                        if current_model:
-                            # Find the model in the combo box
-                            index = self.model_combo.findText(current_model)
-                            if index >= 0:
-                                self.model_combo.setCurrentIndex(index)
-                                print(f"Set current model to: {current_model}")
-                            else:
-                                print(f"Model {current_model} not found in available models")
-                        else:
-                            print("No current model information found")
-                    
-                except Exception as e:
-                    print(f"Error getting current model: {str(e)}")
-                
-                # Properly handle the signal connection
-                try:
-                    # Store the connections state in a class variable
-                    if not hasattr(self, '_model_combo_connected'):
-                        self._model_combo_connected = False
-
-                    # If already connected, disconnect first
-                    if self._model_combo_connected:
-                        try:
-                            self.model_combo.currentTextChanged.disconnect(self.handle_model_selection)
-                        except TypeError:
-                            pass  # Ignore if not connected
-                    
-                    # Connect the signal and update the state
-                    self.model_combo.currentTextChanged.connect(self.handle_model_selection)
-                    self._model_combo_connected = True
-                    
-                except Exception as e:
-                    print(f"Error handling model combo signals: {str(e)}")
-                
-                # Unblock signals
-                self.model_combo.blockSignals(False)
-                
-                # Update UI state
-                self.update_generate_button_state()
-                
-                return True
+                    if response.status_code == 200:
+                        current_model = response.json().get('model')
+            
+            # Set the current model in combo box if found
+            if current_model:
+                print(f"Server has model loaded: {current_model}")  # Debug print
+                index = self.model_combo.findText(current_model)
+                if index >= 0:
+                    self.model_combo.setCurrentIndex(index)
+                    print(f"Set combo box to loaded model: {current_model}")  # Debug print
+                else:
+                    print(f"Warning: Loaded model {current_model} not found in available models")
+        except Exception as e:
+            print(f"Error getting current model from server: {str(e)}")
         
-        return False
+        # Connect signal for model selection changes
+        try:
+            if hasattr(self, '_model_combo_connected'):
+                try:
+                    self.model_combo.currentTextChanged.disconnect(self.handle_model_selection)
+                except TypeError:
+                    pass
+            self.model_combo.currentTextChanged.connect(self.handle_model_selection)
+            self._model_combo_connected = True
+        except Exception as e:
+            print(f"Error handling model combo signals: {str(e)}")
+        
+        # Unblock signals
+        self.model_combo.blockSignals(False)
+
+    def handle_empty_combo_click(self, event):
+        """Handle clicks on the combo box when it's empty"""
+        if not any(d.is_dir() for d in (Path("backend") / "models").iterdir()):
+            print("Opening download dialog from empty state...")
+            dialog = ModelDownloadDialog(self)
+            dialog.setWindowTitle("Download New Model")
+            dialog.setModal(True)
+            if dialog.exec():
+                print("Model download dialog accepted")
+                # Remove the custom click handler
+                self.model_combo.mousePressEvent = self.model_combo.__class__.mousePressEvent
+                self.refresh_models()
+        # Call the original mousePressEvent
+        self.model_combo.__class__.mousePressEvent(self.model_combo, event)
     
     def refresh_model_status(self):
         """Periodically check and update the current model status"""
@@ -491,24 +521,45 @@ class MainWindow(QMainWindow):
 
     def handle_model_selection(self, selection):
         """Handle model selection including download option"""
-        if selection == "Add new model...":
-            # Reset selection to previous model
-            self.model_combo.blockSignals(True)
-            if self.model_combo.currentIndex() > 0:
-                self.model_combo.setCurrentIndex(0)
-            self.model_combo.blockSignals(False)
+        print(f"handle_model_selection called with: {selection}")  # Debug print
+        
+        # Ignore empty selections or initial state
+        if not selection:
+            return
             
-            # Show download dialog
-            dialog = ModelDownloadDialog(self)
-            dialog.exec_()
-        else:
+        if selection == "Add new model...":
+            print("Opening download dialog...")  # Debug print
+            try:
+                dialog = ModelDownloadDialog(self)
+                dialog.setWindowTitle("Download New Model")
+                dialog.setModal(True)
+                result = dialog.exec()
+                print(f"Dialog result: {result}")  # Debug print
+                
+                if result:
+                    print("Model download dialog accepted")
+                    self.refresh_models()
+                
+                # Reset selection to previous model if one exists
+                self.model_combo.blockSignals(True)
+                if self.model_combo.count() > 1:
+                    self.model_combo.setCurrentIndex(0)
+                self.model_combo.blockSignals(False)
+                
+            except Exception as e:
+                print(f"Error in handle_model_selection: {str(e)}")
+                QMessageBox.critical(self, "Error", f"Failed to open model download dialog: {str(e)}")
+        elif not selection.startswith("-"):  # Ignore separator and empty selections
             # Handle normal model switching
-            if not selection.startswith("-"):  # Ignore separator
-                # Disable combo box during switch
-                self.model_combo.setEnabled(False)
-                self.switch_model(selection)
+            self.model_combo.setEnabled(False)
+            self.switch_model(selection)
 
     def switch_model(self, model_name):
+        # Don't attempt to switch if model_name is empty or None
+        if not model_name or model_name == "Add new model...":
+            self.model_combo.setEnabled(True)
+            return
+
         def switch_task(model_name, api_url, api_key):
             try:
                 headers = {

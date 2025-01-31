@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, 
                              QLineEdit, QPushButton, QLabel, QMessageBox)
 import requests
+from src.worker_thread import WorkerThread
 
 class ModelDownloadDialog(QDialog):
     def __init__(self, parent=None):
@@ -36,8 +37,14 @@ class ModelDownloadDialog(QDialog):
             QMessageBox.warning(self, "Error", "Please enter a repository ID")
             return
 
-        def download_task(repo_id, api_url, api_key):
-            api_url = api_url.rstrip('/') + '/v1/download'
+        print(f"Starting download request for repo: {repo_id}")
+
+        def download_task(api_url=None, api_key=None, repo_id=None):
+            """Send download request to server"""
+            # Use the correct endpoint
+            request_url = f"{api_url.rstrip('/')}/v1/download"  # Changed from /v1/model/download
+            print(f"Sending request to: {request_url}")
+            
             headers = {
                 'Authorization': f'Bearer {api_key}',
                 'Content-Type': 'application/json'
@@ -52,20 +59,24 @@ class ModelDownloadDialog(QDialog):
                 "repo_type": "model"
             }
             
-            response = requests.post(api_url, headers=headers, json=payload)
+            response = requests.post(request_url, headers=headers, json=payload)
+            print(f"Response status: {response.status_code}")
+            print(f"Response content: {response.text}")
+            
             if response.status_code != 200:
-                raise Exception(f"Download failed: {response.text}")
+                raise Exception(f"Download request failed: {response.text}")
+                
             return response.json()
 
         self.download_button.setEnabled(False)
-        self.status_label.setText("Downloading model...")
+        self.status_label.setText("Sending download request...")
 
-        # Create and start worker thread
+        # Create worker thread with kwargs
         self.worker = WorkerThread(
-            download_task, 
-            repo_id, 
-            self.parent().api_url, 
-            self.parent().api_key
+            task_func=download_task,
+            api_url=self.parent().api_url,
+            api_key=self.parent().api_key,
+            repo_id=repo_id
         )
         self.worker.finished.connect(self.on_download_complete)
         self.worker.error.connect(self.on_download_error)
@@ -73,7 +84,7 @@ class ModelDownloadDialog(QDialog):
 
     def on_download_complete(self, result):
         self.download_button.setEnabled(True)
-        QMessageBox.information(self, "Success", "Model downloaded successfully!")
+        QMessageBox.information(self, "Success", "Download request sent successfully! The server will handle the download.")
         self.parent().refresh_models()
         self.accept()
 
