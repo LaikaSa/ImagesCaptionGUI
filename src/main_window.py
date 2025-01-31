@@ -263,7 +263,8 @@ class MainWindow(QMainWindow):
         self.caption_styles = {
             "JSON Format": "Describe the picture in structured json-like format.",
             "Detailed": "Give a long and detailed description of the picture.",
-            "Brief": "Describe the picture briefly."
+            "Brief": "Describe the picture briefly.",
+            "Custom": ""  # Empty string as we'll use custom input
         }
         
         # Initialize API configuration
@@ -320,6 +321,14 @@ class MainWindow(QMainWindow):
         self.style_combo.addItems(self.caption_styles.keys())
         style_layout.addWidget(style_label)
         style_layout.addWidget(self.style_combo)
+
+        # Add custom prompt input
+        self.custom_prompt_input = QLineEdit()
+        self.custom_prompt_input.setPlaceholderText("Enter your custom prompt here...")
+        self.custom_prompt_input.setMinimumWidth(200)
+        self.custom_prompt_input.hide()  # Hidden by default
+        style_layout.addWidget(self.custom_prompt_input)
+
         style_layout.addStretch()
         
         # Create radio buttons and select button layout with prefix
@@ -373,6 +382,9 @@ class MainWindow(QMainWindow):
         self.generate_button.clicked.connect(self.generate_caption)
         self.use_tags_checkbox.stateChanged.connect(self.update_generate_button_state)
         self.style_combo.currentIndexChanged.connect(self.update_generate_button_state)
+        self.style_combo.currentTextChanged.connect(self.handle_style_selection) 
+
+        self.custom_prompt_input.textChanged.connect(self.update_generate_button_state)
         
         # Initialize model combo signal
         print("Setting up model combo signal...")  # Debug print
@@ -393,6 +405,13 @@ class MainWindow(QMainWindow):
         
         # Initial status check
         self.check_backend_status()
+
+    def handle_style_selection(self, style):
+        """Handle caption style selection changes"""
+        if style == "Custom":
+            self.custom_prompt_input.show()
+        else:
+            self.custom_prompt_input.hide()
 
     def refresh_models(self):
         """Get list of available models and sync with currently loaded model"""
@@ -907,9 +926,15 @@ class MainWindow(QMainWindow):
                             f"Could not verify model status: {str(e)}")
             return
 
-        # Get selected caption style
         selected_style = self.style_combo.currentText()
-        user_prompt = self.caption_styles[selected_style]
+        if selected_style == "Custom":
+            user_prompt = self.custom_prompt_input.text().strip()
+            if not user_prompt:
+                QMessageBox.warning(self, "Input Required", 
+                                "Please enter a custom prompt.")
+                return
+        else:
+            user_prompt = self.caption_styles[selected_style]
 
         # Check if current model is ExLlamaV2
         current_model = self.model_combo.currentText()
@@ -1118,3 +1143,20 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self.caption_text.setText(f"Error: {str(e)}")
                 print(f"Exception details: {str(e)}")
+
+    def update_generate_button_state(self):
+        """Update generate button state based on current conditions"""
+        should_enable = False
+        
+        if self.is_batch_mode:
+            # Enable if we have files selected for batch mode
+            should_enable = len(self.selected_files) > 0
+        else:
+            # Enable if we have a single image selected
+            should_enable = self.current_image_path is not None
+
+        # Add custom prompt validation
+        if should_enable and self.style_combo.currentText() == "Custom":
+            should_enable = bool(self.custom_prompt_input.text().strip())
+
+        self.generate_button.setEnabled(should_enable)
