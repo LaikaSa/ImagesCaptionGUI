@@ -43,7 +43,5 @@ start /wait cmd /c install_gui.bat
 echo.
 echo Installation completed!
 echo To start the application:
-echo 1. First run the backend using 'backend\start.bat'
-echo 2. Then run the GUI using 'run.bat'
 echo.
 pause
