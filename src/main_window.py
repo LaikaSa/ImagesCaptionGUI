@@ -31,24 +31,99 @@ class ModelComboBox(QComboBox):
         else:
             super().mousePressEvent(event)
 
+class CaptionFormatDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Caption Format Settings")
+        self.setModal(True)
+        self.setMinimumWidth(300)
+        
+        layout = QFormLayout(self)
+        
+        # Create input fields
+        self.tags_format = QLineEdit()
+        self.caption_format = QLineEdit()
+        
+        # Load saved settings or use defaults
+        self.load_settings()
+        
+        # Add fields to layout
+        layout.addRow("Reference Tags Format:", self.tags_format)
+        layout.addRow("Caption Save Format:", self.caption_format)
+        
+        # Add help text
+        help_text = QLabel("Enter file extensions (e.g., .txt, .caption)")
+        help_text.setStyleSheet("color: gray;")
+        layout.addRow(help_text)
+        
+        # Add save button
+        save_button = QPushButton("Save")
+        save_button.clicked.connect(self.save_settings)
+        layout.addRow(save_button)
+    
+    def load_settings(self):
+        """Load format settings from file"""
+        try:
+            if os.path.exists('format_config.json'):
+                with open('format_config.json', 'r') as f:
+                    config = json.load(f)
+                    self.tags_format.setText(config.get('tags_format', '.txt'))
+                    self.caption_format.setText(config.get('caption_format', '.caption'))
+            else:
+                # Set defaults
+                self.tags_format.setText('.txt')
+                self.caption_format.setText('.caption')
+        except Exception as e:
+            print(f"Error loading format settings: {e}")
+            # Set defaults on error
+            self.tags_format.setText('.txt')
+            self.caption_format.setText('.caption')
+    
+    def save_settings(self):
+        """Save format settings to file"""
+        try:
+            config = {
+                'tags_format': self.tags_format.text().strip(),
+                'caption_format': self.caption_format.text().strip()
+            }
+            
+            # Validate formats
+            for fmt in config.values():
+                if not fmt.startswith('.'):
+                    QMessageBox.warning(self, "Invalid Format", 
+                                     "File formats must start with a dot (.)")
+                    return
+            
+            with open('format_config.json', 'w') as f:
+                json.dump(config, f)
+            
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save settings: {str(e)}")
+
 class BatchProcessThread(QThread):
     progress = Signal(int, int)
     finished = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, api_url, api_key, image_files, user_prompt, sampling_config, use_tags, prefix=""):
+    def __init__(self, **kwargs):
         super().__init__()
-        self.api_url = api_url
-        self.api_key = api_key
-        self.image_files = image_files
-        self.user_prompt = user_prompt
-        self.sampling_config = sampling_config
-        self.use_tags = use_tags
-        self.prefix = prefix.strip()
+        self.api_url = kwargs.get('api_url')
+        self.api_key = kwargs.get('api_key')
+        self.image_files = kwargs.get('image_files')
+        self.user_prompt = kwargs.get('user_prompt')
+        self.sampling_config = kwargs.get('sampling_config')
+        self.use_tags = kwargs.get('use_tags')
+        self.prefix = kwargs.get('prefix', '').strip()
+        self.tags_format = kwargs.get('tags_format', '.txt')
+        self.caption_format = kwargs.get('caption_format', '.caption')
         self.results = {}
 
     def run(self):
         try:
+            import os  # Add this import
+            import time  # Make sure time is imported too
+            
             for i, image_path in enumerate(tqdm(self.image_files, desc="Processing", ncols=70), 1):
                 print(f"\nProcessing image {i}: {image_path}")  # Debug print
                 
@@ -57,7 +132,7 @@ class BatchProcessThread(QThread):
                     prompt = self.user_prompt
                     if self.use_tags:
                         try:
-                            tags_path = os.path.splitext(image_path)[0] + '.txt'
+                            tags_path = os.path.splitext(image_path)[0] + self.tags_format
                             if os.path.exists(tags_path):
                                 with open(tags_path, 'r', encoding='utf-8') as f:
                                     tags = f.read().strip()
@@ -128,7 +203,7 @@ class BatchProcessThread(QThread):
                                 
                             self.results[image_path] = caption
 
-                            caption_path = os.path.splitext(image_path)[0] + '.caption'
+                            caption_path = os.path.splitext(image_path)[0] + self.caption_format
                             with open(caption_path, 'w', encoding='utf-8') as f:
                                 f.write(caption)
                             print(f"Saved caption for image {i}")  # Debug print
@@ -275,7 +350,12 @@ class MainWindow(QMainWindow):
         # Initialize sampling config from model's config or defaults
         self.sampling_config = self.get_default_sampling_config()
         self.load_sampling_config()
-        
+
+        # Initialize format settings
+        self.tags_format = '.txt'
+        self.caption_format = '.caption'
+        self.load_format_settings()        
+
         # Create menu bar
         self.create_menu_bar()
         
@@ -732,6 +812,17 @@ class MainWindow(QMainWindow):
         if dialog.exec_():
             self.load_config()
 
+    def load_format_settings(self):
+        """Load format settings from config file"""
+        try:
+            if os.path.exists('format_config.json'):
+                with open('format_config.json', 'r') as f:
+                    config = json.load(f)
+                    self.tags_format = config.get('tags_format', '.txt')
+                    self.caption_format = config.get('caption_format', '.caption')
+        except Exception as e:
+            print(f"Error loading format settings: {e}")
+
     def check_backend_status(self):
         try:
             base_url = self.api_url.split('/v1')[0]
@@ -839,6 +930,17 @@ class MainWindow(QMainWindow):
         # Add Configure API action
         api_config_action = settings_menu.addAction("Configure API")
         api_config_action.triggered.connect(self.show_config_dialog)
+        
+        # Add Caption Format action
+        format_action = settings_menu.addAction("Caption Format")
+        format_action.triggered.connect(self.show_format_dialog)
+
+    def show_format_dialog(self):
+        """Show the caption format configuration dialog"""
+        dialog = CaptionFormatDialog(self)
+        if dialog.exec_():
+            # Reload format settings
+            self.load_format_settings()
 
     def show_sampling_dialog(self):
         dialog = SamplingConfigDialog(self)
@@ -1040,15 +1142,16 @@ class MainWindow(QMainWindow):
             self.folder_radio.setEnabled(False)
 
             # Create and start worker thread with corrected argument order
-            self.worker = WorkerThread(
-                task_func=batch_task,
-                files=self.selected_files,
+            self.worker = BatchProcessThread(
                 api_url=self.api_url,
                 api_key=self.api_key,
-                prompt=user_prompt,
+                image_files=self.selected_files,
+                user_prompt=user_prompt,
                 sampling_config=sampling_config,
                 use_tags=self.use_tags_checkbox.isChecked(),
-                prefix=self.prefix_input.text()
+                prefix=self.prefix_input.text(),
+                tags_format=self.tags_format,  # Add this
+                caption_format=self.caption_format  # Add this
             )
             self.worker.finished.connect(self.batch_processing_finished)
             self.worker.error.connect(self.batch_processing_error)
@@ -1077,6 +1180,17 @@ class MainWindow(QMainWindow):
                 # Read and encode image
                 with open(self.current_image_path, 'rb') as img_file:
                     image_base64 = base64.b64encode(img_file.read()).decode('utf-8')
+
+                if self.use_tags_checkbox.isChecked():
+                    try:
+                        tags_path = os.path.splitext(self.current_image_path)[0] + self.tags_format
+                        if os.path.exists(tags_path):
+                            with open(tags_path, 'r', encoding='utf-8') as f:
+                                tags = f.read().strip()
+                                user_prompt += ' Also here are booru tags for better understanding of the picture, you can use them as reference.'
+                                user_prompt += f' <tags>\n{tags}\n</tags>'
+                    except Exception as e:
+                        print(f"Error loading tags: {str(e)}")
 
                 # Prepare the payload with sampling config
                 payload = {
@@ -1129,8 +1243,8 @@ class MainWindow(QMainWindow):
                                 
                             self.caption_text.setText(caption)
 
-                            # Save caption file with same name as image but .caption extension
-                            caption_path = os.path.splitext(self.current_image_path)[0] + '.caption'
+                            # Use the configured caption format
+                            caption_path = os.path.splitext(self.current_image_path)[0] + self.caption_format
                             with open(caption_path, 'w', encoding='utf-8') as f:
                                 f.write(caption)  # Save with prefix included
                         else:
