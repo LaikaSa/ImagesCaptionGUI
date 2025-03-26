@@ -367,15 +367,20 @@ class MainWindow(QMainWindow):
         # Create model selection layout
         model_layout = QHBoxLayout()
         model_layout.addStretch()
-        
+
         model_label = QLabel("Model:")
-        # Use the custom combo box instead of the standard one
-        self.model_combo = ModelComboBox(self)  # Changed this line
+        self.model_combo = ModelComboBox(self)
         self.model_combo.setMinimumWidth(200)
-        
+
+        # Add load button
+        self.load_model_button = QPushButton("Load")
+        self.load_model_button.clicked.connect(self.load_selected_model)
+        self.load_model_button.setToolTip("Load the selected model")
+
         model_layout.addWidget(model_label)
         model_layout.addWidget(self.model_combo)
-        
+        model_layout.addWidget(self.load_model_button)
+
         # Add model selection to layout
         layout.addLayout(model_layout)
         
@@ -485,6 +490,94 @@ class MainWindow(QMainWindow):
         
         # Initial status check
         self.check_backend_status()
+
+    def load_selected_model(self):
+        """Load the model selected in the dropdown"""
+        selected_model = self.model_combo.currentText()
+        
+        # Don't attempt to load if it's the "Add new model..." option or separator
+        if not selected_model or selected_model == "Add new model..." or selected_model.startswith("-"):
+            QMessageBox.warning(self, "Invalid Selection", "Please select a valid model to load.")
+            return
+        
+        # Disable UI during model loading
+        self.model_combo.setEnabled(False)
+        self.load_model_button.setEnabled(False)
+        self.generate_button.setEnabled(False)
+        self.status_label.setText("Loading model...")
+        self.status_label.setStyleSheet("color: orange")
+        
+        # Create and start worker thread with keyword arguments
+        self.worker = WorkerThread(
+            task_func=self.switch_model_task,
+            model_name=selected_model,
+            api_url=self.api_url,
+            api_key=self.api_key
+        )
+        self.worker.finished.connect(self.on_switch_complete)
+        self.worker.error.connect(self.on_switch_error)
+        self.worker.start()
+
+    def switch_model_task(self, model_name, api_url, api_key):
+        """Task function to switch models (to be run in a worker thread)"""
+        try:
+            headers = {
+                'Authorization': f'Bearer {api_key}',
+                'X-Admin-Key': api_key,
+                'accept': 'application/json',
+                'Content-Type': 'application/json'
+            }
+
+            # First check if a model is loaded
+            health_url = api_url.rstrip('/') + '/health'
+            health_response = requests.get(health_url, headers=headers)
+            if health_response.status_code == 200:
+                # Properly unload the current model
+                print("Unloading current model...")
+                unload_url = api_url.rstrip('/') + '/v1/model/unload'
+                unload_response = requests.post(unload_url, headers=headers)
+                print(f"Unload response: {unload_response.status_code}")
+                
+                # Wait for unload to complete
+                import time
+                time.sleep(5)
+
+            # Load new model with vision enabled
+            load_url = api_url.rstrip('/') + '/v1/model/load'
+            payload = {
+                "model_name": model_name,
+                "vision": True
+            }
+            
+            print(f"Loading model: {model_name} with vision enabled")
+            
+            # Use non-streaming request first to initiate load
+            init_response = requests.post(load_url, headers=headers, json=payload)
+            if init_response.status_code != 200:
+                raise Exception(f"Error initiating model load: {init_response.text}")
+
+            # Wait for model to be fully ready
+            max_retries = 30  # Increased retries
+            for i in range(max_retries):
+                time.sleep(2)  # Wait between checks
+                
+                try:
+                    health_response = requests.get(health_url, headers=headers)
+                    if health_response.status_code == 200:
+                        health_data = health_response.json()
+                        if health_data.get("status") == "healthy":
+                            print(f"Model verified ready after {i+1} attempts")
+                            return {"status": "success", "model": model_name}
+                except Exception as e:
+                    print(f"Health check attempt {i+1} failed: {str(e)}")
+                
+                print(f"Model not ready yet, attempt {i+1} of {max_retries}")
+            
+            raise Exception("Model failed to become ready after maximum retries")
+
+        except Exception as e:
+            print(f"Exception in switch_model_task: {str(e)}")
+            raise Exception(f"Error switching model: {str(e)}")
 
     def handle_style_selection(self, style):
         """Handle caption style selection changes"""
@@ -648,10 +741,7 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"Error in handle_model_selection: {str(e)}")
                 QMessageBox.critical(self, "Error", f"Failed to open model download dialog: {str(e)}")
-        elif not selection.startswith("-"):  # Ignore separator and empty selections
-            # Handle normal model switching
-            self.model_combo.setEnabled(False)
-            self.switch_model(selection)
+        # Remove the automatic model switching part that was here
 
     def switch_model(self, model_name):
         # Don't attempt to switch if model_name is empty or None
